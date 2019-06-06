@@ -50,15 +50,6 @@ end
 local function get_iso8601_basic_short(timestamp)
   return os.date('!%Y%m%d', timestamp)
 end
-
-local function get_derived_signing_key(keys, timestamp, region, service)
-  local h = resty_hmac:new()
-  k_date = h:digest('sha256', 'AWS4' .. keys['secret_key'], get_iso8601_basic_short(timestamp), true)
-  k_region = h:digest('sha256', k_date, region, true)
-  k_service = h:digest('sha256', k_region, service, true)
-  return h:digest('sha256', k_service, 'aws4_request', true)
-end
-
 local function get_cred_scope(timestamp, region, service)
   return get_iso8601_basic_short(timestamp)
     .. '/' .. region
@@ -97,9 +88,19 @@ local function get_string_to_sign(timestamp, region, service, host, uri)
     .. get_hashed_canonical_request(timestamp, host, uri)
 end
 
-local function get_signature(derived_signing_key, string_to_sign)
-  local h = resty_hmac:new()
-  return h:digest('sha256', derived_signing_key, string_to_sign, false)
+local function hmac_sha256_digest(key, content, hex_output)
+  return resty_hmac:new(key, resty_hmac.ALGOS.SHA256):final(content, hex_output)
+end
+
+local function hmac_sha256_hexdigest(key, content)
+  return hmac_sha256_digest(key, content, true)
+end
+
+local function get_derived_signing_key(keys, timestamp, region, service)
+  local k_date = hmac_sha256_digest('AWS4' .. keys['secret_key'], get_iso8601_basic_short(timestamp))
+  local k_region = hmac_sha256_digest(k_date, region)
+  local k_service = hmac_sha256_digest(k_region, service)
+  return hmac_sha256_digest(k_service, 'aws4_request')
 end
 
 local function get_authorization(keys, timestamp, region, service, host, uri)
@@ -108,7 +109,7 @@ local function get_authorization(keys, timestamp, region, service, host, uri)
   local auth = 'AWS4-HMAC-SHA256 '
     .. 'Credential=' .. keys['access_key'] .. '/' .. get_cred_scope(timestamp, region, service)
     .. ', SignedHeaders=' .. get_signed_headers()
-    .. ', Signature=' .. get_signature(derived_signing_key, string_to_sign)
+    .. ', Signature=' .. hmac_sha256_hexdigest(derived_signing_key, string_to_sign)
   return auth
 end
 
